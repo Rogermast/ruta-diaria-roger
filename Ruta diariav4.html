@@ -1,0 +1,384 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Ruta Diaria Roger</title>
+
+  <!-- Estilos -->
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      padding: 15px;
+      background-color: #f9f9f9;
+      margin: 0;
+    }
+    .container {
+      max-width: 1000px;
+      margin: 0 auto;
+      background: white;
+      padding: 15px;
+      border-radius: 8px;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.1);
+    }
+    h1, h2, h3 {
+      color: #2c3e50;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 15px 0;
+    }
+    th, td {
+      border: 1px solid #ccc;
+      padding: 8px;
+      text-align: left;
+    }
+    th {
+      background-color: #ecf0f1;
+    }
+    input, textarea, button {
+      margin: 5px 0;
+      padding: 6px;
+    }
+    button {
+      background-color: #3498db;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+    button:hover { background-color: #2980b9; }
+    button.edit { background-color: #2ecc71; }
+    button.edit:hover { background-color: #27ae60; }
+    button.delete { background-color: #e74c3c; }
+    button.delete:hover { background-color: #c0392b; }
+    #mapa {
+      height: 400px;
+      border: 1px solid #bbb;
+      margin-top: 10px;
+      border-radius: 4px;
+    }
+    label { display: block; margin-top: 8px; }
+    small { color: #7f8c8d; font-size: 0.9em; }
+    .alert {
+      background: #fff3cd;
+      color: #856404;
+      padding: 10px;
+      border-radius: 4px;
+      margin: 10px 0;
+      border: 1px solid #ffeaa7;
+    }
+  </style>
+
+  <!-- Librerías externas -->
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/file-saver@2.0.5/dist/FileSaver.min.js"></script>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+</head>
+<body>
+  <div class="container">
+    <h1>📍 Ruta Diaria Roger</h1>
+
+    <!-- Advertencia si no es HTTPS ni localhost -->
+    <div id="advertencia-https" class="alert" style="display:none;">
+      ⚠️ <strong>Geolocalización desactivada</strong><br>
+      Para usar tu ubicación en móvil, abre esta página con <strong>HTTPS</strong>.<br>
+      💡 Usa <code>ngrok</code>, <strong>GitHub Pages</strong>, o un servidor local con HTTPS.
+    </div>
+
+    <!-- Formulario -->
+    <div>
+      <h3>Agregar / Editar Punto</h3>
+      <input type="hidden" id="editIndex" value="-1">
+      <label>Nombre: <input type="text" id="nombre" placeholder="Ej: Cliente ABC"></label>
+      <label>Latitud: <input type="number" id="lat" step="any" placeholder="Ej: -12.0464"></label>
+      <label>Longitud: <input type="number" id="lng" step="any" placeholder="Ej: -77.0428"></label>
+      <button type="button" onclick="obtenerUbicacionActual()">📍 Usar mi ubicación actual</button><br><br>
+
+      <label>Notas:<br>
+        <textarea id="notas" rows="3" cols="40" placeholder="Ej: Puerta roja, contacto: Juan"></textarea>
+      </label><br>
+
+      <label>Foto (opcional): 
+        <input type="file" id="foto" accept="image/*" capture="environment">
+      </label>
+      <br><small>📸 Se guarda solo en este dispositivo.</small><br><br>
+
+      <button type="button" onclick="agregarOActualizarPunto()">✅ Guardar Punto</button>
+      <button type="button" onclick="cancelarEdicion()">Cancelar</button>
+      <button type="button" onclick="limpiarTodo()">🗑️ Limpiar Todo</button>
+    </div>
+
+    <!-- Tabla -->
+    <div>
+      <h3>Puntos Registrados</h3>
+      <table id="tabla-puntos">
+        <thead>
+          <tr>
+            <th>Nombre</th>
+            <th>Lat</th>
+            <th>Lng</th>
+            <th>Notas</th>
+            <th>Foto</th>
+            <th>Acciones</th>
+          </tr>
+        </thead>
+        <tbody id="cuerpo-tabla"></tbody>
+      </table>
+    </div>
+
+    <!-- Mapa -->
+    <div>
+      <h3>Mapa en Tiempo Real</h3>
+      <div id="mapa"></div>
+    </div>
+
+    <!-- Exportar -->
+    <div>
+      <h3>Exportar</h3>
+      <button onclick="exportarExcel()">📤 Exportar a Excel (.xlsx)</button>
+      <button onclick="exportarKMZ()">🌍 Exportar a KMZ</button>
+    </div>
+  </div>
+
+  <script>
+    // === Inicialización ===
+    let puntos = JSON.parse(localStorage.getItem('rutaDiariaRoger')) || [];
+    let marcadores = [];
+    let mapa = null;
+
+    document.addEventListener('DOMContentLoaded', () => {
+      // Mostrar advertencia si no es entorno seguro
+      const esSeguro = location.protocol === 'https:' || 
+                       location.hostname === 'localhost' || 
+                       location.hostname === '127.0.0.1' ||
+                       location.hostname === '';
+      if (!esSeguro) {
+        document.getElementById('advertencia-https').style.display = 'block';
+      }
+
+      // Inicializar mapa
+      mapa = L.map('mapa').setView([-12.0464, -77.0428], 13);
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+      }).addTo(mapa);
+
+      actualizarTabla();
+    });
+
+    // === Geolocalización mejorada ===
+    function obtenerUbicacionActual() {
+      const esSeguro = location.protocol === 'https:' || 
+                       location.hostname === 'localhost' || 
+                       location.hostname === '127.0.0.1';
+      if (!esSeguro) {
+        alert('📍 Para usar la ubicación en móvil, necesitas HTTPS.\n\n💡 Solución:\n- Usa ngrok\n- Sube a GitHub Pages\n- Usa un hosting con HTTPS');
+        return;
+      }
+
+      if (!navigator.geolocation) {
+        alert('⚠️ Tu navegador no soporta geolocalización.');
+        return;
+      }
+
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          document.getElementById('lat').value = pos.coords.latitude.toFixed(6);
+          document.getElementById('lng').value = pos.coords.longitude.toFixed(6);
+          alert('✅ Ubicación obtenida con éxito.');
+        },
+        (err) => {
+          let msg = '❌ No se pudo obtener tu ubicación.\n\n';
+          switch(err.code) {
+            case err.PERMISSION_DENIED:
+              msg += '• No diste permiso.\n• Revisa los permisos del navegador o del sistema.';
+              break;
+            case err.POSITION_UNAVAILABLE:
+              msg += '• Ubicación no disponible.\n• Activa el GPS y conexión a internet.';
+              break;
+            case err.TIMEOUT:
+              msg += '• Tiempo de espera agotado.\n• Intenta de nuevo.';
+              break;
+            default:
+              msg += '• Error desconocido.';
+          }
+          alert(msg);
+          console.error('Error GPS:', err);
+        },
+        { enableHighAccuracy: true, timeout: 10000, maximumAge: 60000 }
+      );
+    }
+
+    // === Gestión de puntos ===
+    function agregarOActualizarPunto() {
+      const nombre = document.getElementById('nombre').value.trim();
+      const lat = parseFloat(document.getElementById('lat').value);
+      const lng = parseFloat(document.getElementById('lng').value);
+      const notas = document.getElementById('notas').value.trim();
+      const fotoInput = document.getElementById('foto');
+      const editIndex = parseInt(document.getElementById('editIndex').value);
+
+      if (!nombre || isNaN(lat) || isNaN(lng)) {
+        alert('Completa nombre, latitud y longitud.');
+        return;
+      }
+
+      const procesarPunto = (fotoBase64 = null) => {
+        const punto = { nombre, lat, lng, notas, foto: fotoBase64 };
+        if (editIndex >= 0) {
+          puntos[editIndex] = punto;
+        } else {
+          puntos.push(punto);
+        }
+        guardarEnLocalStorage();
+        actualizarTabla();
+        cancelarEdicion();
+      };
+
+      if (fotoInput.files && fotoInput.files[0]) {
+        const file = fotoInput.files[0];
+        if (!file.type.startsWith('image/')) {
+          alert('Solo imágenes permitidas.');
+          return;
+        }
+        const reader = new FileReader();
+        reader.onload = (e) => procesarPunto(e.target.result);
+        reader.readAsDataURL(file);
+      } else {
+        procesarPunto(editIndex >= 0 ? puntos[editIndex].foto : null);
+      }
+    }
+
+    function editarPunto(index) {
+      const p = puntos[index];
+      document.getElementById('editIndex').value = index;
+      document.getElementById('nombre').value = p.nombre;
+      document.getElementById('lat').value = p.lat;
+      document.getElementById('lng').value = p.lng;
+      document.getElementById('notas').value = p.notas || '';
+      window.scrollTo(0, 0);
+    }
+
+    function eliminarPunto(index) {
+      if (confirm('¿Eliminar este punto?')) {
+        puntos.splice(index, 1);
+        guardarEnLocalStorage();
+        actualizarTabla();
+      }
+    }
+
+    function cancelarEdicion() {
+      document.getElementById('editIndex').value = -1;
+      document.getElementById('nombre').value = '';
+      document.getElementById('lat').value = '';
+      document.getElementById('lng').value = '';
+      document.getElementById('notas').value = '';
+      document.getElementById('foto').value = '';
+    }
+
+    function limpiarTodo() {
+      if (confirm('¿Eliminar TODOS los puntos?')) {
+        puntos = [];
+        guardarEnLocalStorage();
+        actualizarTabla();
+      }
+    }
+
+    function guardarEnLocalStorage() {
+      localStorage.setItem('rutaDiariaRoger', JSON.stringify(puntos));
+    }
+
+    function actualizarTabla() {
+      const tbody = document.getElementById('cuerpo-tabla');
+      tbody.innerHTML = '';
+      puntos.forEach((p, index) => {
+        const tr = document.createElement('tr');
+        const tieneFoto = p.foto ? '📸' : '—';
+        tr.innerHTML = `
+          <td>${p.nombre}</td>
+          <td>${p.lat}</td>
+          <td>${p.lng}</td>
+          <td>${p.notas || '—'}</td>
+          <td>${tieneFoto}</td>
+          <td>
+            <button class="edit" onclick="editarPunto(${index})">✏️ Editar</button>
+            <button class="delete" onclick="eliminarPunto(${index})">🗑️ Eliminar</button>
+          </td>
+        `;
+        tbody.appendChild(tr);
+      });
+      actualizarMapa();
+    }
+
+    function actualizarMapa() {
+      marcadores.forEach(marker => mapa.removeLayer(marker));
+      marcadores = [];
+      puntos.forEach(p => {
+        const marker = L.marker([p.lat, p.lng]).addTo(mapa);
+        let content = `<b>${p.nombre}</b><br>${p.lat}, ${p.lng}`;
+        if (p.notas) content += `<br><i>${p.notas}</i>`;
+        if (p.foto) content += `<br><img src="${p.foto}" width="120" style="margin-top:6px;">`;
+        marker.bindPopup(content);
+        marcadores.push(marker);
+      });
+      if (puntos.length > 0) {
+        const group = L.featureGroup(marcadores);
+        mapa.fitBounds(group.getBounds().pad(0.15));
+      }
+    }
+
+    // === Exportaciones ===
+    function exportarExcel() {
+      if (puntos.length === 0) {
+        alert('No hay puntos para exportar.');
+        return;
+      }
+      const data = puntos.map(p => ({
+        Nombre: p.nombre,
+        Latitud: p.lat,
+        Longitud: p.lng,
+        Notas: p.notas || ''
+      }));
+      const ws = XLSX.utils.json_to_sheet(data);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "Puntos");
+      XLSX.writeFile(wb, "RutaDiariaRoger.xlsx");
+    }
+
+    function exportarKMZ() {
+      if (puntos.length === 0) {
+        alert('No hay puntos para exportar.');
+        return;
+      }
+      let kml = `<?xml version="1.0" encoding="UTF-8"?>
+<kml xmlns="http://www.opengis.net/kml/2.2">
+<Document>
+<name>Ruta Diaria Roger</name>
+`;
+      puntos.forEach(p => {
+        const desc = p.notas ? `<description><![CDATA[${p.notas}]]></description>` : '';
+        kml += `
+<Placemark>
+  <name>${p.nombre}</name>
+  ${desc}
+  <Point>
+    <coordinates>${p.lng},${p.lat}</coordinates>
+  </Point>
+</Placemark>`;
+      });
+      kml += `
+</Document>
+</kml>`;
+
+      const zip = new JSZip();
+      zip.file("doc.kml", kml);
+      zip.generateAsync({ type: "blob" }).then(blob => {
+        saveAs(blob, "RutaDiariaRoger.kmz");
+      });
+    }
+  </script>
+</body>
+</html>
