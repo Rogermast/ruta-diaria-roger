@@ -5,7 +5,6 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>Ruta Diaria Roger</title>
 
-  <!-- Estilos -->
   <style>
     body {
       font-family: Arial, sans-serif;
@@ -53,6 +52,10 @@
     button.edit:hover { background-color: #27ae60; }
     button.delete { background-color: #e74c3c; }
     button.delete:hover { background-color: #c0392b; }
+    button:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
     #mapa {
       height: 400px;
       border: 1px solid #bbb;
@@ -71,7 +74,7 @@
     }
   </style>
 
-  <!-- Librerías externas -->
+  <!-- Librerías externas (gratuitas y CDN) -->
   <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/file-saver@2.0.5/dist/FileSaver.min.js"></script>
@@ -82,14 +85,12 @@
   <div class="container">
     <h1>📍 Ruta Diaria Roger</h1>
 
-    <!-- Advertencia si no es HTTPS ni localhost -->
     <div id="advertencia-https" class="alert" style="display:none;">
       ⚠️ <strong>Geolocalización desactivada</strong><br>
       Para usar tu ubicación en móvil, abre esta página con <strong>HTTPS</strong>.<br>
-      💡 Usa <code>ngrok</code>, <strong>GitHub Pages</strong>, o un servidor local con HTTPS.
+      💡 Usa GitHub Pages, ngrok, o un hosting seguro.
     </div>
 
-    <!-- Formulario -->
     <div>
       <h3>Agregar / Editar Punto</h3>
       <input type="hidden" id="editIndex" value="-1">
@@ -107,12 +108,11 @@
       </label>
       <br><small>📸 Se guarda solo en este dispositivo.</small><br><br>
 
-      <button type="button" onclick="agregarOActualizarPunto()">✅ Guardar Punto</button>
+      <button type="button" id="btn-guardar" onclick="agregarOActualizarPunto()">✅ Guardar Punto</button>
       <button type="button" onclick="cancelarEdicion()">Cancelar</button>
       <button type="button" onclick="limpiarTodo()">🗑️ Limpiar Todo</button>
     </div>
 
-    <!-- Tabla -->
     <div>
       <h3>Puntos Registrados</h3>
       <table id="tabla-puntos">
@@ -130,37 +130,33 @@
       </table>
     </div>
 
-    <!-- Mapa -->
     <div>
       <h3>Mapa en Tiempo Real</h3>
       <div id="mapa"></div>
     </div>
 
-    <!-- Exportar -->
     <div>
       <h3>Exportar</h3>
-      <button onclick="exportarExcel()">📤 Exportar a Excel (.xlsx)</button>
-      <button onclick="exportarKMZ()">🌍 Exportar a KMZ</button>
+      <button id="btn-excel" onclick="exportarExcel()">📤 Exportar a Excel (.xlsx)</button>
+      <button id="btn-kmz" onclick="exportarKMZ()">🌍 Exportar a KMZ</button>
     </div>
   </div>
 
   <script>
-    // === Inicialización ===
     let puntos = JSON.parse(localStorage.getItem('rutaDiariaRoger')) || [];
     let marcadores = [];
     let mapa = null;
+    let procesando = false;
+    let exportando = false;
 
     document.addEventListener('DOMContentLoaded', () => {
-      // Mostrar advertencia si no es entorno seguro
       const esSeguro = location.protocol === 'https:' || 
                        location.hostname === 'localhost' || 
-                       location.hostname === '127.0.0.1' ||
-                       location.hostname === '';
+                       location.hostname === '127.0.0.1';
       if (!esSeguro) {
         document.getElementById('advertencia-https').style.display = 'block';
       }
 
-      // Inicializar mapa
       mapa = L.map('mapa').setView([-12.0464, -77.0428], 13);
       L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
         attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
@@ -169,13 +165,12 @@
       actualizarTabla();
     });
 
-    // === Geolocalización mejorada ===
     function obtenerUbicacionActual() {
       const esSeguro = location.protocol === 'https:' || 
                        location.hostname === 'localhost' || 
                        location.hostname === '127.0.0.1';
       if (!esSeguro) {
-        alert('📍 Para usar la ubicación en móvil, necesitas HTTPS.\n\n💡 Solución:\n- Usa ngrok\n- Sube a GitHub Pages\n- Usa un hosting con HTTPS');
+        alert('📍 Para usar la ubicación en móvil, necesitas HTTPS.\n\n💡 Sube este archivo a GitHub Pages (gratis y permanente).');
         return;
       }
 
@@ -194,10 +189,10 @@
           let msg = '❌ No se pudo obtener tu ubicación.\n\n';
           switch(err.code) {
             case err.PERMISSION_DENIED:
-              msg += '• No diste permiso.\n• Revisa los permisos del navegador o del sistema.';
+              msg += '• No diste permiso.\n• Revisa permisos del navegador o sistema.';
               break;
             case err.POSITION_UNAVAILABLE:
-              msg += '• Ubicación no disponible.\n• Activa el GPS y conexión a internet.';
+              msg += '• Ubicación no disponible.\n• Activa GPS e internet.';
               break;
             case err.TIMEOUT:
               msg += '• Tiempo de espera agotado.\n• Intenta de nuevo.';
@@ -212,8 +207,9 @@
       );
     }
 
-    // === Gestión de puntos ===
     function agregarOActualizarPunto() {
+      if (procesando) return;
+
       const nombre = document.getElementById('nombre').value.trim();
       const lat = parseFloat(document.getElementById('lat').value);
       const lng = parseFloat(document.getElementById('lng').value);
@@ -226,26 +222,51 @@
         return;
       }
 
+      procesando = true;
+      const btn = document.getElementById('btn-guardar');
+      const textoOriginal = btn.innerHTML;
+      btn.innerHTML = '⏳ Guardando...';
+      btn.disabled = true;
+
+      const finalizar = () => {
+        procesando = false;
+        btn.innerHTML = textoOriginal;
+        btn.disabled = false;
+      };
+
       const procesarPunto = (fotoBase64 = null) => {
-        const punto = { nombre, lat, lng, notas, foto: fotoBase64 };
-        if (editIndex >= 0) {
-          puntos[editIndex] = punto;
-        } else {
-          puntos.push(punto);
+        try {
+          const punto = { nombre, lat, lng, notas, foto: fotoBase64 };
+          if (editIndex >= 0) {
+            puntos[editIndex] = punto;
+          } else {
+            puntos.push(punto);
+          }
+          guardarEnLocalStorage();
+          actualizarTabla();
+          cancelarEdicion();
+        } catch (e) {
+          console.error(e);
+          alert('Error al guardar el punto. Intenta de nuevo.');
+        } finally {
+          finalizar();
         }
-        guardarEnLocalStorage();
-        actualizarTabla();
-        cancelarEdicion();
       };
 
       if (fotoInput.files && fotoInput.files[0]) {
         const file = fotoInput.files[0];
         if (!file.type.startsWith('image/')) {
           alert('Solo imágenes permitidas.');
+          finalizar();
           return;
         }
+
         const reader = new FileReader();
         reader.onload = (e) => procesarPunto(e.target.result);
+        reader.onerror = () => {
+          alert('Error al leer la imagen.');
+          finalizar();
+        };
         reader.readAsDataURL(file);
       } else {
         procesarPunto(editIndex >= 0 ? puntos[editIndex].foto : null);
@@ -330,37 +351,62 @@
       }
     }
 
-    // === Exportaciones ===
     function exportarExcel() {
+      if (exportando) return;
       if (puntos.length === 0) {
         alert('No hay puntos para exportar.');
         return;
       }
-      const data = puntos.map(p => ({
-        Nombre: p.nombre,
-        Latitud: p.lat,
-        Longitud: p.lng,
-        Notas: p.notas || ''
-      }));
-      const ws = XLSX.utils.json_to_sheet(data);
-      const wb = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(wb, ws, "Puntos");
-      XLSX.writeFile(wb, "RutaDiariaRoger.xlsx");
+
+      exportando = true;
+      const btn = document.getElementById('btn-excel');
+      const original = btn.innerHTML;
+      btn.innerHTML = '📤 Exportando...';
+      btn.disabled = true;
+
+      try {
+        const data = puntos.map(p => ({
+          Nombre: p.nombre,
+          Latitud: p.lat,
+          Longitud: p.lng,
+          Notas: p.notas || ''
+        }));
+        const ws = XLSX.utils.json_to_sheet(data);
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, "Puntos");
+        XLSX.writeFile(wb, "RutaDiariaRoger.xlsx");
+      } catch (e) {
+        console.error(e);
+        alert('Error al exportar a Excel.');
+      } finally {
+        exportando = false;
+        btn.innerHTML = original;
+        btn.disabled = false;
+      }
     }
 
     function exportarKMZ() {
+      if (exportando) return;
       if (puntos.length === 0) {
         alert('No hay puntos para exportar.');
         return;
       }
-      let kml = `<?xml version="1.0" encoding="UTF-8"?>
+
+      exportando = true;
+      const btn = document.getElementById('btn-kmz');
+      const original = btn.innerHTML;
+      btn.innerHTML = '🌍 Exportando...';
+      btn.disabled = true;
+
+      try {
+        let kml = `<?xml version="1.0" encoding="UTF-8"?>
 <kml xmlns="http://www.opengis.net/kml/2.2">
 <Document>
 <name>Ruta Diaria Roger</name>
 `;
-      puntos.forEach(p => {
-        const desc = p.notas ? `<description><![CDATA[${p.notas}]]></description>` : '';
-        kml += `
+        puntos.forEach(p => {
+          const desc = p.notas ? `<description><![CDATA[${p.notas}]]></description>` : '';
+          kml += `
 <Placemark>
   <name>${p.nombre}</name>
   ${desc}
@@ -368,17 +414,32 @@
     <coordinates>${p.lng},${p.lat}</coordinates>
   </Point>
 </Placemark>`;
-      });
-      kml += `
+        });
+        kml += `
 </Document>
 </kml>`;
 
-      const zip = new JSZip();
-      zip.file("doc.kml", kml);
-      zip.generateAsync({ type: "blob" }).then(blob => {
-        saveAs(blob, "RutaDiariaRoger.kmz");
-      });
+        const zip = new JSZip();
+        zip.file("doc.kml", kml);
+        zip.generateAsync({ type: "blob" }).then(blob => {
+          saveAs(blob, "RutaDiariaRoger.kmz");
+        }).catch(err => {
+          console.error(err);
+          alert('Error al crear el archivo KMZ.');
+        }).finally(() => {
+          exportando = false;
+          btn.innerHTML = original;
+          btn.disabled = false;
+        });
+      } catch (e) {
+        console.error(e);
+        alert('Error al preparar el KMZ.');
+        exportando = false;
+        btn.innerHTML = original;
+        btn.disabled = false;
+      }
     }
   </script>
 </body>
 </html>
+
